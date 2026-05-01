@@ -7,17 +7,19 @@ class Api::V1::AuthController < Api::BaseController
 
   # Login
   def login
-    # Tenta encontrar o usuário pelo email
-    email = params[:email]&.strip&.downcase
+    # Aceita corpo plano { email, password } ou aninhado { user: { email, password } }
+    email = login_email_param
+    password = login_password_param
     user = User.from_email(email)
-    
-    if user&.valid_password?(params[:password])
+
+    if user&.valid_password?(password.to_s)
       if user.mfa_enabled?
         render_mfa_required(user)
       else
         render_successful_login(user)
       end
     else
+      log_login_failure(email, user, password)
       render_invalid_credentials
     end
   end
@@ -321,6 +323,60 @@ class Api::V1::AuthController < Api::BaseController
   end
 
   private
+
+  def login_email_param
+    raw = fetch_login_field(:email)
+    raw&.to_s&.strip&.downcase.presence
+  end
+
+  def login_password_param
+    fetch_login_field(:password)
+  end
+
+  # Aceita chaves no topo, sob `user` ou `auth`, com símbolo ou string (JSON/clients diversos).
+  # Para email usa `.presence`; para senha preserva string vazia se a chave existir (sem usar `.presence`).
+  def fetch_login_field(field)
+    sym = field.to_sym
+    str = field.to_s
+    password_field = sym == :password
+
+    if params.key?(sym) || params.key?(str)
+      val = params.key?(sym) ? params[sym] : params[str]
+      return coerce_login_field(val, password_field: password_field)
+    end
+
+    %i[user auth].each do |root|
+      nested = params[root] || params[root.to_s]
+      next unless nested.respond_to?(:key?)
+
+      next unless nested.key?(sym) || nested.key?(str)
+
+      val = nested.key?(sym) ? nested[sym] : nested[str]
+      return coerce_login_field(val, password_field: password_field)
+    end
+
+    nil
+  end
+
+  def coerce_login_field(val, password_field:)
+    return nil if val.nil?
+
+    if password_field
+      val.to_s
+    else
+      val.presence
+    end
+  end
+
+  def log_login_failure(email, user, password)
+    return if Rails.env.test?
+
+    Rails.logger.warn(
+      '[Auth::Login] Invalid credentials ' \
+      "(email_present=#{email.present?} user_found=#{user.present?} " \
+      "password_present=#{password.present?} enc_password_blank=#{user&.encrypted_password.blank?})"
+    )
+  end
 
   def validation_error_details(user)
     user.errors.map do |error|

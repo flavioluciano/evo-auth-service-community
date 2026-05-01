@@ -19,7 +19,16 @@ class AgentBuilder
     return user if user
 
     generated_password = password.presence || "1!aA#{SecureRandom.alphanumeric(12)}"
-    User.create!(email: email, name: name, password: generated_password)
+    record = User.new(
+      email: email,
+      name: name,
+      password: generated_password,
+      password_confirmation: generated_password
+    )
+    # Admin-created members should log in immediately (no email confirmation step).
+    record.skip_confirmation!
+    record.save!
+    record
   end
 
   def assign_role

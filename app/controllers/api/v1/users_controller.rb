@@ -19,6 +19,7 @@ class Api::V1::UsersController < Api::BaseController
   def create
     builder = AgentBuilder.new(
       email: new_user_params['email'],
+      password: new_user_params['password'],
       name: new_user_params['name'],
       role: new_user_params['role'],
       availability: new_user_params['availability'],

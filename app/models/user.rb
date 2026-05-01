@@ -53,8 +53,7 @@ class User < ApplicationRecord
   include SsoAuthenticatable
   include UserAttributeHelpers
   include TwoFactorAuthenticatable
-  
-  require "argon2"
+
   PASSWORD_SPECIAL_CHAR_REGEX = /[^A-Za-z0-9]/.freeze
 
   BASIC_READ_PERMISSIONS = %w[
@@ -69,6 +68,9 @@ class User < ApplicationRecord
          :validatable,
          :confirmable,
          :omniauthable, omniauth_providers: [:google_oauth2]
+
+  # Deve ficar depois de `devise` para sobrepor #valid_password? do Devise / devise_token_auth.
+  prepend UserPasswordVerification
 
   enum availability: { online: 0, offline: 1, busy: 2 }
 
@@ -182,19 +184,12 @@ class User < ApplicationRecord
     @password
   end
 
-  def valid_password?(password_to_check)
-    return false if encrypted_password.blank? || password_to_check.blank?
-    
-    begin
-      Argon2::Password.verify_password(password_to_check, encrypted_password)
-    rescue => e
-      Rails.logger.error "Erro ao verificar senha: #{e.class} - #{e.message}"
-      false
-    end
-  end
-
   def self.from_email(email)
-    find_by(email: email&.downcase)
+    normalized = email.to_s.strip.downcase
+    return nil if normalized.blank?
+
+    # Case-insensitive + tolerância a espaços em volta no registo (Postgres/SQLite).
+    where('LOWER(TRIM(email)) = ?', normalized).first
   end
 
   def auto_offline
@@ -251,12 +246,15 @@ class User < ApplicationRecord
     "#{ENV['FRONTEND_URL']}/sso?token=#{SecureRandom.hex(32)}&user_id=#{id}"
   end
 
-
-
-  scope :order_by_full_name, -> { order('lower(name) ASC') }
-
   def password_complexity
     return if password.blank?
+
+    if relaxed_password_policy?
+      min = ENV.fetch('MIN_PASSWORD_LENGTH', '6').to_i
+      min = 1 if min < 1
+      errors.add(:password, "must be at least #{min} characters") if password.length < min
+      return
+    end
 
     unless password.match?(/[a-z]/)
       errors.add(:password, 'must include at least one lowercase letter')
@@ -273,5 +271,11 @@ class User < ApplicationRecord
     unless password.match?(PASSWORD_SPECIAL_CHAR_REGEX)
       errors.add(:password, 'must include at least one special character')
     end
+  end
+
+  def relaxed_password_policy?
+    ActiveModel::Type::Boolean.new.cast(
+      ENV.fetch('RELAX_PASSWORD_POLICY', (Rails.env.development? ? 'true' : 'false'))
+    )
   end
 end

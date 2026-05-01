@@ -166,8 +166,16 @@ Devise.setup do |config|
   # config.rememberable_options = {}
 
   # ==> Configuration for :validatable
-  # Range for password length.
-  config.password_length = 8..128
+  # Range for password length ( relaxed policy via RELAX_PASSWORD_POLICY + MIN_PASSWORD_LENGTH )
+  relaxed_pw = ActiveModel::Type::Boolean.new.cast(
+    ENV.fetch('RELAX_PASSWORD_POLICY', Rails.env.development? ? 'true' : 'false')
+  )
+  config.password_length = if relaxed_pw
+    min = ENV.fetch('MIN_PASSWORD_LENGTH', '6').to_i.clamp(1, 128)
+    min..128
+  else
+    8..128
+  end
 
   # Email regex used to validate email formats. It simply asserts that
   # one (and only one) @ exists in the given string. This is mainly
